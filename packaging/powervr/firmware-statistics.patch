@@ -1,0 +1,20 @@
+--- a/pvr_ccb.c
++++ b/pvr_ccb.c
+@@ -148,6 +148,17 @@
+ 	case ROGUE_FWIF_FWCCB_CMD_FREELIST_GROW:
+ 		pvr_free_list_process_grow_req(pvr_dev, &cmd->cmd_data.cmd_free_list_gs);
+ 		break;
++
++	case ROGUE_FWIF_FWCCB_CMD_UPDATE_STATS: {
++		const struct rogue_fwif_fwccb_cmd_update_stats_data *stats =
++			&cmd->cmd_data.cmd_update_stats_data;
++
++		/* This notification carries accounting information and needs no reply. */
++		drm_dbg(from_pvr_device(pvr_dev),
++			"FW stats: pid=%u element=%u adjustment=%d\n",
++			stats->pid_owner, stats->element_to_update, stats->adjustment_value);
++		break;
++	}
+ 
+ 	default:
+ 		drm_info(from_pvr_device(pvr_dev), "Received unknown FWCCB command %x\n",

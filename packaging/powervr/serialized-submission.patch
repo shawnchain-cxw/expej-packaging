@@ -1,0 +1,240 @@
+--- a/include/uapi/drm/pvr_drm.h
++++ b/include/uapi/drm/pvr_drm.h
+@@ -482,6 +482,9 @@
+ 	 * a pointer to &struct drm_pvr_dev_query_static_data_areas.
+ 	 */
+ 	DRM_PVR_DEV_QUERY_STATIC_DATA_AREAS_GET,
++
++	/** @DRM_PVR_DEV_QUERY_TIMESTAMP: Query a monotonic time in nanoseconds. */
++	DRM_PVR_DEV_QUERY_TIMESTAMP,
+ };
+ 
+ /**
+@@ -1181,6 +1184,13 @@
+  */
+ #define DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_PREVENT_ALL_OVERLAP _BITULL(0)
+ #define DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_SINGLE_CORE _BITULL(1)
++
++/**
++ * A compute queue marker. The stream contains a u32 GEM handle followed
++ * by a reserved zero u32. The first u64 of the buffer receives the
++ * monotonic timestamp in nanoseconds before the signal syncobj completes.
++ */
++#define DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_TIMESTAMP _BITULL(2)
+ #define DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_FLAGS_MASK         \
+ 	(DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_PREVENT_ALL_OVERLAP | \
+ 	 DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_SINGLE_CORE)
+--- a/pvr_drv.c
++++ b/pvr_drv.c
+@@ -28,6 +28,7 @@
+ #include <linux/export.h>
+ #include <linux/fs.h>
+ #include <linux/kernel.h>
++#include <linux/ktime.h>
+ #include <linux/list.h>
+ #include <linux/mod_devicetable.h>
+ #include <linux/module.h>
+@@ -661,6 +662,18 @@
+ 	case DRM_PVR_DEV_QUERY_STATIC_DATA_AREAS_GET:
+ 		ret = pvr_static_data_areas_get(pvr_dev, args);
+ 		break;
++	case DRM_PVR_DEV_QUERY_TIMESTAMP: {
++		u64 now = ktime_get_ns();
++
++		if (args->pointer && args->size < sizeof(now)) {
++			ret = -E2BIG;
++			break;
++		}
++		ret = args->pointer && copy_to_user(u64_to_user_ptr(args->pointer), &now,
++						  sizeof(now)) ? -EFAULT : 0;
++		args->size = sizeof(now);
++		break;
++	}
+ 	}
+ 
+ 	drm_dev_exit(idx);
+--- a/pvr_job.h
++++ b/pvr_job.h
+@@ -84,6 +84,12 @@
+ 	/** @cmd: Command data. Format depends on @type. */
+ 	void *cmd;
+ 
++	/** @timestamp_obj: Firmware storage for a timestamp marker. */
++	struct pvr_fw_object *timestamp_obj;
++	u64 *timestamp;
++	struct pvr_gem_object *timestamp_dst;
++	u64 *timestamp_dst_map;
++
+ 	/** @cmd_len: Length of command data, in bytes. */
+ 	u32 cmd_len;
+ 
+--- a/pvr_job.c
++++ b/pvr_job.c
+@@ -33,6 +33,12 @@
+ 	WARN_ON(job->chained_job);
+ 
+ 	pvr_queue_job_cleanup(job);
++	if (job->timestamp_obj)
++		pvr_fw_object_unmap_and_destroy(job->timestamp_obj);
++	if (job->timestamp_dst_map)
++		pvr_gem_object_vunmap(job->timestamp_dst);
++	if (job->timestamp_dst)
++		pvr_gem_object_put(job->timestamp_dst);
+ 	pvr_job_release_pm_ref(job);
+ 
+ 	kfree(job->cmd);
+@@ -274,6 +280,41 @@
+ }
+ 
+ static int
++pvr_timestamp_job_init(struct pvr_job *job, struct pvr_file *file,
++		       const struct drm_pvr_job *args)
++{
++	u32 stream[2];
++
++	if (job->ctx->type != DRM_PVR_CTX_TYPE_COMPUTE ||
++	    args->cmd_stream_len != sizeof(stream))
++		return -EINVAL;
++	if (copy_from_user(stream, u64_to_user_ptr(args->cmd_stream), sizeof(stream)))
++		return -EFAULT;
++	if (stream[1])
++		return -EINVAL;
++	job->timestamp_dst = pvr_gem_object_from_handle(file, stream[0]);
++	if (!job->timestamp_dst ||
++	    !(job->timestamp_dst->flags & DRM_PVR_BO_ALLOW_CPU_USERSPACE_ACCESS))
++		return -EINVAL;
++	job->timestamp_dst_map = pvr_gem_object_vmap(job->timestamp_dst);
++	if (IS_ERR(job->timestamp_dst_map)) {
++		int ret = PTR_ERR(job->timestamp_dst_map);
++
++		job->timestamp_dst_map = NULL;
++		return ret;
++	}
++
++	job->timestamp = pvr_fw_object_create_and_map(job->pvr_dev, sizeof(*job->timestamp),
++						      PVR_BO_FW_FLAGS_DEVICE_UNCACHED,
++						      NULL, NULL, &job->timestamp_obj);
++	if (IS_ERR(job->timestamp))
++		return PTR_ERR(job->timestamp);
++	WRITE_ONCE(*job->timestamp, 0);
++	job->fw_ccb_cmd_type = ROGUE_FWIF_CCB_CMD_TYPE_NULL;
++	return 0;
++}
++
++static int
+ pvr_job_fw_cmd_init(struct pvr_job *job,
+ 		    struct drm_pvr_job *args)
+ {
+@@ -443,7 +484,11 @@
+ 		}
+ 	}
+ 
+-	err = pvr_job_fw_cmd_init(job, args);
++	if (args->type == DRM_PVR_JOB_TYPE_COMPUTE &&
++	    args->flags == DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_TIMESTAMP)
++		err = pvr_timestamp_job_init(job, pvr_file, args);
++	else
++		err = pvr_job_fw_cmd_init(job, args);
+ 	if (err)
+ 		goto err_put_job;
+ 
+--- a/pvr_queue.c
++++ b/pvr_queue.c
+@@ -3,7 +3,13 @@
+ 
+ #include <drm/drm_managed.h>
+ #include <drm/gpu_scheduler.h>
++#include <linux/clk.h>
++#include <linux/ktime.h>
++#include <linux/math64.h>
+ 
++#include "pvr_gem.h"
++#include "pvr_rogue_defs.h"
++
+ #include "pvr_cccb.h"
+ #include "pvr_context.h"
+ #include "pvr_device.h"
+@@ -353,7 +359,8 @@
+ 	 * and a command for the job itself.
+ 	 */
+ 	return ufo_cmds_size(1) + ufo_cmds_size(ufo_wait_count) +
+-	       pvr_cccb_get_size_of_cmd_with_hdr(job->cmd_len);
++	       pvr_cccb_get_size_of_cmd_with_hdr(job->cmd_len) +
++	       (job->timestamp_obj ? pvr_cccb_get_size_of_cmd_with_hdr(sizeof(u64)) : 0);
+ }
+ 
+ /**
+@@ -720,7 +727,47 @@
+ 	pvr_queue_update_active_state_locked(queue);
+ 	mutex_unlock(&pvr_dev->queues.lock);
+ }
++
++/* Timestamp markers use the firmware's GPU-to-host clock correlation.
++ * Rebase at each marker to account for power cycles and the current OPP.
++ */
++static void pvr_queue_write_timestamp(struct pvr_job *job, struct pvr_cccb *cccb)
++{
++	struct pvr_device *dev = job->pvr_dev;
++	struct pvr_fw_object *obj = dev->fw_dev.mem.gpu_util_fwcb_obj;
++	struct rogue_fwif_gpu_util_fwcb *util = pvr_fw_object_vmap(obj);
++	u32 address[2] = {};
+ 
++	if (!IS_ERR(util)) {
++		u32 rate = clk_get_rate(dev->core_clk);
++
++		if (rate) {
++			/* Separate context schedulers can publish markers concurrently. */
++			mutex_lock(&dev->queues.lock);
++			u32 seq = READ_ONCE(util->time_corr_seq_count) + 1;
++			struct rogue_fwif_time_corr *corr =
++				&util->time_corr[ROGUE_FWIF_TIME_CORR_CURR_INDEX(seq)];
++			u64 cr = pvr_cr_read64(dev, ROGUE_CR_TIMER) & ~ROGUE_CR_TIMER_VALUE_CLRMSK;
++			u64 ns = ktime_get_ns();
++
++			WRITE_ONCE(corr->os_timestamp, ns);
++			WRITE_ONCE(corr->os_mono_timestamp, ns);
++			WRITE_ONCE(corr->cr_timestamp, cr);
++			WRITE_ONCE(corr->cr_delta_to_os_delta_kns,
++				   div_u64(((u64)ROGUE_CRTIME_TICK_IN_CYCLES * NSEC_PER_SEC) << 20,
++					   rate));
++			WRITE_ONCE(corr->core_clock_speed, rate);
++			dma_wmb();
++			WRITE_ONCE(util->time_corr_seq_count, seq);
++			mutex_unlock(&dev->queues.lock);
++		}
++		pvr_fw_object_vunmap(obj);
++	}
++	pvr_fw_object_get_fw_addr(job->timestamp_obj, &address[0]);
++	pvr_cccb_write_command_with_header(cccb, ROGUE_FWIF_CCB_CMD_TYPE_POST_TIMESTAMP,
++					   sizeof(address), address, job->id, job->id);
++}
++
+ /*
+  * With @fence_only, only the fence checks are written: the partial render
+  * job of a combined geometry + partial render + fragment kick whose command is
+@@ -799,6 +846,9 @@
+ 	pvr_cccb_write_command_with_header(cccb, job->fw_ccb_cmd_type, job->cmd_len, job->cmd,
+ 					   job->id, job->id);
+ 
++	if (job->timestamp_obj)
++		pvr_queue_write_timestamp(job, cccb);
++
+ 	/* Signal the job fence. */
+ 	pvr_fw_object_get_fw_addr(queue->timeline_ufo.fw_obj, &ufos[0].addr);
+ 	ufos[0].value = job->done_fence->seqno;
+@@ -1086,6 +1136,15 @@
+ 			break;
+ 
+ 		if (!dma_fence_is_signaled(job->done_fence)) {
++			if (job->timestamp_obj) {
++				u64 ns;
++
++				dma_rmb();
++				ns = READ_ONCE(*job->timestamp);
++				WRITE_ONCE(*job->timestamp_dst_map, ns);
++				if (!ns)
++					dma_fence_set_error(job->done_fence, -EIO);
++			}
+ 			dma_fence_signal(job->done_fence);
+ 			pvr_job_release_pm_ref(job);
+ 			atomic_dec(&queue->in_flight_job_count);

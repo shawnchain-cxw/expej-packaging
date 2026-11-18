@@ -1,0 +1,173 @@
+--- a/include/uapi/drm/pvr_drm.h
++++ b/include/uapi/drm/pvr_drm.h
+@@ -485,6 +485,9 @@
+ 
+ 	/** @DRM_PVR_DEV_QUERY_TIMESTAMP: Query a monotonic time in nanoseconds. */
+ 	DRM_PVR_DEV_QUERY_TIMESTAMP,
++
++	/** @DRM_PVR_DEV_QUERY_TIMESTAMP_BUFFER: Supports ranged timestamp writes. */
++	DRM_PVR_DEV_QUERY_TIMESTAMP_BUFFER,
+ };
+ 
+ /**
+@@ -1189,6 +1192,12 @@
+  * A compute queue marker. The stream contains a u32 GEM handle followed
+  * by a reserved zero u32. The first u64 of the buffer receives the
+  * monotonic timestamp in nanoseconds before the signal syncobj completes.
++ *
++ * With DRM_PVR_DEV_QUERY_TIMESTAMP_BUFFER, an extended 16-byte stream
++ * gives two (GEM handle, byte offset) pairs. The first receives a u64
++ * timestamp and the second receives a u32 availability value of 1.
++ * Both offsets must be naturally aligned. The availability write and
++ * signal syncobj are ordered after publication of the timestamp.
+  */
+ #define DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_TIMESTAMP _BITULL(2)
+ #define DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_FLAGS_MASK         \
+--- a/pvr_drv.c
++++ b/pvr_drv.c
+@@ -674,6 +674,10 @@
+ 		args->size = sizeof(now);
+ 		break;
+ 	}
++	case DRM_PVR_DEV_QUERY_TIMESTAMP_BUFFER:
++		args->size = 0;
++		ret = 0;
++		break;
+ 	}
+ 
+ 	drm_dev_exit(idx);
+--- a/pvr_job.c
++++ b/pvr_job.c
+@@ -39,6 +39,10 @@
+ 		pvr_gem_object_vunmap(job->timestamp_dst);
+ 	if (job->timestamp_dst)
+ 		pvr_gem_object_put(job->timestamp_dst);
++	if (job->timestamp_avail_map)
++		pvr_gem_object_vunmap(job->timestamp_avail);
++	if (job->timestamp_avail)
++		pvr_gem_object_put(job->timestamp_avail);
+ 	pvr_job_release_pm_ref(job);
+ 
+ 	kfree(job->cmd);
+@@ -280,28 +284,65 @@
+ }
+ 
+ static int
++pvr_timestamp_map_dst(struct pvr_file *file, u32 handle, u32 offset,
++		      size_t size, struct pvr_gem_object **obj_out, void **map_out)
++{
++	struct pvr_gem_object *obj = pvr_gem_object_from_handle(file, handle);
++	void *mapping;
++	int err;
++
++	if (!obj)
++		return -EINVAL;
++	if (!(obj->flags & DRM_PVR_BO_ALLOW_CPU_USERSPACE_ACCESS) ||
++	    !IS_ALIGNED(offset, size) || (u64)offset + size > pvr_gem_object_size(obj)) {
++		err = -EINVAL;
++		goto err_put;
++	}
++
++	mapping = pvr_gem_object_vmap(obj);
++	if (IS_ERR(mapping)) {
++		err = PTR_ERR(mapping);
++		goto err_put;
++	}
++
++	*obj_out = obj;
++	*map_out = (u8 *)mapping + offset;
++	return 0;
++
++err_put:
++	pvr_gem_object_put(obj);
++	return err;
++}
++
++static int
+ pvr_timestamp_job_init(struct pvr_job *job, struct pvr_file *file,
+ 		       const struct drm_pvr_job *args)
+ {
+-	u32 stream[2];
++	u32 stream[4] = {};
++	bool extended = args->cmd_stream_len == sizeof(stream);
++	void *map;
++	int err;
+ 
+ 	if (job->ctx->type != DRM_PVR_CTX_TYPE_COMPUTE ||
+-	    args->cmd_stream_len != sizeof(stream))
++	    (!extended && args->cmd_stream_len != 2 * sizeof(u32)))
+ 		return -EINVAL;
+-	if (copy_from_user(stream, u64_to_user_ptr(args->cmd_stream), sizeof(stream)))
++	if (copy_from_user(stream, u64_to_user_ptr(args->cmd_stream), args->cmd_stream_len))
+ 		return -EFAULT;
+-	if (stream[1])
++	if (!extended && stream[1])
+ 		return -EINVAL;
+-	job->timestamp_dst = pvr_gem_object_from_handle(file, stream[0]);
+-	if (!job->timestamp_dst ||
+-	    !(job->timestamp_dst->flags & DRM_PVR_BO_ALLOW_CPU_USERSPACE_ACCESS))
+-		return -EINVAL;
+-	job->timestamp_dst_map = pvr_gem_object_vmap(job->timestamp_dst);
+-	if (IS_ERR(job->timestamp_dst_map)) {
+-		int ret = PTR_ERR(job->timestamp_dst_map);
+ 
+-		job->timestamp_dst_map = NULL;
+-		return ret;
++	err = pvr_timestamp_map_dst(file, stream[0], stream[1], sizeof(u64),
++				    &job->timestamp_dst, &map);
++	if (err)
++		return err;
++	job->timestamp_dst_map = map;
++
++	if (extended) {
++		err = pvr_timestamp_map_dst(file, stream[2], stream[3], sizeof(u32),
++					    &job->timestamp_avail, &map);
++		if (err)
++			return err;
++		job->timestamp_avail_map = map;
+ 	}
+ 
+ 	job->timestamp = pvr_fw_object_create_and_map(job->pvr_dev, sizeof(*job->timestamp),
+--- a/pvr_job.h
++++ b/pvr_job.h
+@@ -89,6 +89,8 @@
+ 	u64 *timestamp;
+ 	struct pvr_gem_object *timestamp_dst;
+ 	u64 *timestamp_dst_map;
++	struct pvr_gem_object *timestamp_avail;
++	u32 *timestamp_avail_map;
+ 
+ 	/** @cmd_len: Length of command data, in bytes. */
+ 	u32 cmd_len;
+--- a/pvr_queue.c
++++ b/pvr_queue.c
+@@ -1107,6 +1107,7 @@
+ 	struct drm_sched_fence *sched_fence = f ? to_drm_sched_fence(f) : NULL;
+ 
+ 	if (sched_fence &&
++	    !test_bit(DRM_SCHED_FENCE_DONT_PIPELINE, &f->flags) &&
+ 	    sched_fence->sched->ops == &pvr_queue_sched_ops)
+ 		return true;
+ 
+@@ -1142,6 +1143,10 @@
+ 				dma_rmb();
+ 				ns = READ_ONCE(*job->timestamp);
+ 				WRITE_ONCE(*job->timestamp_dst_map, ns);
++				if (ns && job->timestamp_avail_map) {
++					dma_wmb();
++					WRITE_ONCE(*job->timestamp_avail_map, 1);
++				}
+ 				if (!ns)
+ 					dma_fence_set_error(job->done_fence, -EIO);
+ 			}
+@@ -1321,6 +1326,10 @@
+ 	if (err)
+ 		return err;
+ 
++	/* The timestamp's CPU-visible result is published after the FW UFO. */
++	if (job->timestamp_obj)
++		set_bit(DRM_SCHED_FENCE_DONT_PIPELINE, &job->base.s_fence->finished.flags);
++
+ 	job->cccb_fence = pvr_queue_fence_alloc();
+ 	job->kccb_fence = pvr_kccb_fence_alloc();
+ 	job->done_fence = pvr_queue_fence_alloc();

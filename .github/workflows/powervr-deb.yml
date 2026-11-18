@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Shawn Chain
+name: PowerVR ARM64 module packages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  powervr:
+    name: PowerVR module for ${{ matrix.kernel }}
+    runs-on: ubuntu-24.04-arm
+    container: debian:13-slim
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: [6.6.98-5, 6.6.98-6]
+    steps:
+      - name: Install Debian 13 build tools
+        run: |
+          apt-get -q update
+          apt-get -qy install --no-install-recommends \
+            build-essential bc ca-certificates curl git kmod libelf-dev xz-utils
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Compile and package the kernel module
+        env:
+          KERNEL_VERSION: ${{ matrix.kernel }}
+        run: bash packaging/build-powervr.sh "$KERNEL_VERSION" "$GITHUB_SHA" "$RUNNER_TEMP/debs"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: expej-powervr-${{ matrix.kernel }}-arm64
+          path: ${{ runner.temp }}/debs/
+          if-no-files-found: error
+          retention-days: 30

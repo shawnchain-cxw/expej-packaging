@@ -1,0 +1,20 @@
+Subject: [LOCAL 6.6] Correct module namespace and declare A733 firmware
+
+Linux 6.6 MODULE_IMPORT_NS stringifies its argument. Passing a string literal
+produces import_ns="DMA_BUF" including quote characters in .modinfo. Use the
+6.6 token form. Also expose the A733 firmware filename to packaging tools;
+runtime firmware selection already uses the hardware BVNC.
+
+This patch targets the pinned 6.6 backport, not a current upstream kernel.
+
+--- a/pvr_drv.c
++++ b/pvr_drv.c
+@@ -1559,6 +1559,7 @@
+ MODULE_AUTHOR("Imagination Technologies Ltd.");
+ MODULE_DESCRIPTION(PVR_DRIVER_DESC);
+ MODULE_LICENSE("Dual MIT/GPL");
+-MODULE_IMPORT_NS("DMA_BUF");
++MODULE_IMPORT_NS(DMA_BUF);
+ MODULE_FIRMWARE("powervr/rogue_33.15.11.3_v1.fw");
+ MODULE_FIRMWARE("powervr/rogue_36.53.104.796_v1.fw");
++MODULE_FIRMWARE("powervr/rogue_36.56.104.183_v1.fw");

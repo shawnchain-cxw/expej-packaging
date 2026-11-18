@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Shawn Chain
+name: Vulkan ARM64 package
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_commit:
+        description: Full commit SHA from expej-mesa
+        required: true
+        default: 'e5d00daf4e62dd7f704c305e83ec005c6caf5cf7'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  vulkan:
+    name: Vulkan userspace
+    runs-on: ubuntu-24.04-arm
+    container: debian:13-slim
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check selected Mesa commit
+        env:
+          MESA_COMMIT: ${{ inputs.mesa_commit }}
+        run: '[[ $MESA_COMMIT =~ ^[0-9a-f]{40}$ ]]'
+      - name: Install Debian 13 build tools
+        run: |
+          apt-get -q update
+          apt-get -qy install --no-install-recommends \
+            build-essential ca-certificates dpkg-dev git openssh-client meson ninja-build pkg-config \
+            python3-mako python3-packaging python3-yaml glslang-tools spirv-tools \
+            flex bison llvm-19-dev libclang-19-dev libclang-cpp19-dev libclc-19-dev \
+            libllvmspirvlib-19-dev libdrm-dev libelf-dev libexpat1-dev libzstd-dev zlib1g-dev \
+            libwayland-dev wayland-protocols libx11-dev libx11-xcb-dev libxrandr-dev \
+            libxshmfence-dev libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev \
+            libxcb-sync-dev libxcb-xfixes0-dev libxcb-shm0-dev libxcb-keysyms1-dev
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check out Mesa source
+        uses: actions/checkout@v6
+        with:
+          repository: shawnchain-cxw/expej-mesa
+          ref: ${{ inputs.mesa_commit }}
+          ssh-key: ${{ secrets.EXPEJ_MESA_DEPLOY_KEY }}
+          path: mesa-source
+          persist-credentials: false
+      - name: Compile and package Vulkan
+        env:
+          MESA_COMMIT: ${{ inputs.mesa_commit }}
+        run: |
+          test "$(git -C mesa-source rev-parse HEAD)" = "$MESA_COMMIT"
+          bash packaging/build-vulkan.sh mesa-source "$GITHUB_SHA" "$RUNNER_TEMP/debs"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: expej-vulkan-arm64
+          path: ${{ runner.temp }}/debs/
+          if-no-files-found: error
+          retention-days: 30

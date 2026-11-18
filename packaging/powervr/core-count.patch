@@ -1,0 +1,55 @@
+--- a/pvr_device.h
++++ b/pvr_device.h
+@@ -72,6 +72,9 @@
+ 	/** @gpu_id: GPU ID detected at runtime. */
+ 	struct pvr_gpu_id gpu_id;
+ 
++	/** @gpu_core_count: Number of physical GPU cores, or zero if unknown. */
++	u32 gpu_core_count;
++
+ 	/**
+ 	 * @features: Hardware feature information.
+ 	 *
+--- a/pvr_device.c
++++ b/pvr_device.c
+@@ -551,6 +551,15 @@
+ 	if (err)
+ 		return err;
+ 
++	if (PVR_HAS_FEATURE(pvr_dev, gpu_multicore_support)) {
++		u32 count = pvr_cr_read32(pvr_dev, ROGUE_CR_MULTICORE_SYSTEM);
++
++		if (!(count & ~ROGUE_CR_MULTICORE_SYSTEM_MASKFULL))
++			pvr_dev->gpu_core_count = count;
++	} else {
++		pvr_dev->gpu_core_count = 1;
++	}
++
+ 	if (PVR_HAS_FEATURE(pvr_dev, meta))
+ 		pvr_dev->fw_dev.processor_type = PVR_FW_PROCESSOR_TYPE_META;
+ 	else if (PVR_HAS_FEATURE(pvr_dev, mips))
+--- a/include/uapi/drm/pvr_drm.h
++++ b/include/uapi/drm/pvr_drm.h
+@@ -142,6 +142,12 @@
+ 
+ 	/** @_padding_c: Reserved. This field must be zeroed. */
+ 	__u32 _padding_c;
++
++	/** @num_cores: Number of physical GPU cores, or zero if unknown. */
++	__u32 num_cores;
++
++	/** @_padding_14: Reserved. This field must be zeroed. */
++	__u32 _padding_14;
+ };
+ 
+ /**
+--- a/pvr_drv.c
++++ b/pvr_drv.c
+@@ -369,6 +369,7 @@
+ 	gpu_info.gpu_id =
+ 		pvr_gpu_id_to_packed_bvnc(&pvr_dev->gpu_id);
+ 	gpu_info.num_phantoms = rogue_get_num_phantoms(pvr_dev);
++	gpu_info.num_cores = pvr_dev->gpu_core_count;
+ 	pr_info("PVRDBG: dev_query gpu_info phantoms=%u\n", gpu_info.num_phantoms);
+ 
+ 	err = PVR_UOBJ_SET(args->pointer, args->size, gpu_info);

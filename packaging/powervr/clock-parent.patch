@@ -1,0 +1,148 @@
+Subject: [DIAGNOSTIC] drm/imagination: Hold the Cubie A7A GPU PLL during active periods
+
+The A733 GPU node names the dedicated GPU PLL "clk_parent" even when its
+core mux selects a peripheral PLL. Take one reference to this clock before
+enabling the core in resume. Match that reference on suspend and unwind.
+A rebind which inherits an already active device acquires the reference at
+probe before the first register access.
+
+Target: powervr-eval-source 37c3dc14 plus 0008 (baseline e71a37c3).
+
+--- a/pvr_device.c
++++ b/pvr_device.c
+@@ -128,7 +128,7 @@
+ 	pvr_dev->sys_clk = sys_clk;
+ 	pvr_dev->mem_clk = mem_clk;
+ 
+-	return 0;
++	return pvr_power_init_a733_parent(pvr_dev);
+ }
+ 
+ static int pvr_device_reset_init(struct pvr_device *pvr_dev)
+@@ -650,6 +650,11 @@
+ 	err = pm_runtime_resume_and_get(dev);
+ 	if (err)
+ 		return err;
++
++	/* Rebinding can inherit an active device without a resume callback. */
++	err = pvr_power_hold_a733_parent(pvr_dev);
++	if (err)
++		goto err_pm_runtime_put;
+ 
+ 	/* Map the control registers into memory. */
+ 	err = pvr_device_reg_init(pvr_dev);
+
+--- a/pvr_device.h
++++ b/pvr_device.h
+@@ -320,6 +320,11 @@
+ 
+ 	/** @has_safety_events: Whether this device can raise safety events. */
+ 	bool has_safety_events;
++
++	/** @a733_parent_clk: Independent PLL specified by the Cubie A7A GPU node. */
++	struct clk *a733_parent_clk;
++	/** @a733_parent_held: Active driver-owned reference to that PLL. */
++	bool a733_parent_held;
+ };
+ 
+ /**
+
+--- a/pvr_power.c
++++ b/pvr_power.c
+@@ -234,6 +234,49 @@
+ 	return 0;
+ }
+ 
++/* Runtime PM serializes the callbacks. Probe's additional call runs under
++ * a runtime reference before the DRM device is published.
++ */
++int pvr_power_hold_a733_parent(struct pvr_device *pvr_dev)
++{
++	int err;
++
++	if (!pvr_dev->a733_parent_clk || pvr_dev->a733_parent_held)
++		return 0;
++
++	err = clk_prepare_enable(pvr_dev->a733_parent_clk);
++	if (!err)
++		pvr_dev->a733_parent_held = true;
++	return err;
++}
++
++static void pvr_power_drop_a733_parent(void *data)
++{
++	struct pvr_device *pvr_dev = data;
++
++	if (pvr_dev->a733_parent_held) {
++		clk_disable_unprepare(pvr_dev->a733_parent_clk);
++		pvr_dev->a733_parent_held = false;
++	}
++}
++
++int pvr_power_init_a733_parent(struct pvr_device *pvr_dev)
++{
++	struct device *dev = from_pvr_device(pvr_dev)->dev;
++	struct clk *clk;
++
++	if (!of_device_is_compatible(dev->of_node, "img,gpu") ||
++	    !of_machine_is_compatible("radxa,cubie-a7a"))
++		return 0;
++
++	clk = devm_clk_get(dev, "clk_parent");
++	if (IS_ERR(clk))
++		return dev_err_probe(dev, PTR_ERR(clk), "failed to get GPU clk_parent\n");
++
++	pvr_dev->a733_parent_clk = clk;
++	return devm_add_action_or_reset(dev, pvr_power_drop_a733_parent, pvr_dev);
++}
++
+ int
+ pvr_power_device_suspend(struct device *dev)
+ {
+@@ -256,6 +299,7 @@
+ 	clk_disable_unprepare(pvr_dev->mem_clk);
+ 	clk_disable_unprepare(pvr_dev->sys_clk);
+ 	clk_disable_unprepare(pvr_dev->core_clk);
++	pvr_power_drop_a733_parent(pvr_dev);
+ 
+ 	err = reset_control_assert(pvr_dev->reset);
+ 
+@@ -278,10 +322,14 @@
+ 	if (!drm_dev_enter(drm_dev, &idx))
+ 		return -EIO;
+ 
++	err = pvr_power_hold_a733_parent(pvr_dev);
++	if (err)
++		goto err_drm_dev_exit;
++
+ 	err = clk_prepare_enable(pvr_dev->core_clk);
+ 	pr_info("PVRDBG: resume clk_prepare_enable -> %d\n", err);
+ 	if (err)
+-		goto err_drm_dev_exit;
++		goto err_parent_clk_disable;
+ 
+ 	err = clk_prepare_enable(pvr_dev->sys_clk);
+ 	if (err)
+@@ -326,6 +374,9 @@
+ 
+ err_core_clk_disable:
+ 	clk_disable_unprepare(pvr_dev->core_clk);
++
++err_parent_clk_disable:
++	pvr_power_drop_a733_parent(pvr_dev);
+ 
+ err_drm_dev_exit:
+ 	drm_dev_exit(idx);
+
+--- a/pvr_power.h
++++ b/pvr_power.h
+@@ -15,6 +15,9 @@
+ void pvr_device_lost(struct pvr_device *pvr_dev);
+ 
+ bool pvr_power_is_idle(struct pvr_device *pvr_dev);
++
++int pvr_power_init_a733_parent(struct pvr_device *pvr_dev);
++int pvr_power_hold_a733_parent(struct pvr_device *pvr_dev);
+ 
+ int pvr_power_device_suspend(struct device *dev);
+ int pvr_power_device_resume(struct device *dev);
