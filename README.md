@@ -35,7 +35,7 @@ PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
   VK_DRIVER_FILES=/usr/share/expej/vulkan/icd.d/powervr_icd.aarch64.json \
   vulkaninfo --summary
 
-expej-gl-run eglinfo -B
+expej-gl-run eglinfo -B -p surfaceless
 ```
 
 If a check fails, inspect the kernel log with `sudo journalctl -k -b -n 100`. To remove the packages, run the following and reboot.

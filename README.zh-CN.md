@@ -35,7 +35,7 @@ PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
   VK_DRIVER_FILES=/usr/share/expej/vulkan/icd.d/powervr_icd.aarch64.json \
   vulkaninfo --summary
 
-expej-gl-run eglinfo -B
+expej-gl-run eglinfo -B -p surfaceless
 ```
 
 验证失败时可用 `sudo journalctl -k -b -n 100` 查看内核日志。如需卸载，移除 Expej 软件包后重启。
