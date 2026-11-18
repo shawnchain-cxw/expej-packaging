@@ -8,7 +8,7 @@ on:
       mesa_commit:
         description: Full commit SHA from expej-mesa
         required: true
-        default: 'e5d00daf4e62dd7f704c305e83ec005c6caf5cf7'
+        default: '93cb656850020e16c0207ecd045a21c91f77a33e'
         type: string
 
 permissions:
