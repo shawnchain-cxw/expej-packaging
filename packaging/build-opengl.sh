@@ -16,7 +16,7 @@ trap 'rm -rf "$work"' EXIT
 
 serial=$(awk '$2 == "EXPEJ_GL_RELEASE" { gsub(/"/, "", $3); print $3 }' src/imagination/expej_version.h)
 [[ $serial =~ ^[0-9]{4}$ ]]
-version="$(cat VERSION)+expej${serial}-1"
+version="$(cat VERSION)+expej${serial}-3"
 package=expej-opengl
 prefix=/usr/lib/aarch64-linux-gnu/expej-gl
 root="$work/package"

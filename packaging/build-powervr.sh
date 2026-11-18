@@ -19,7 +19,7 @@ trap 'rm -rf "$work"' EXIT
 release="$kernel-aw2511"
 recipe=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 package="expej-powervr-$release"
-version="$kernel+expej0078-2"
+version="$kernel+expej0078-4"
 root="$work/package"
 
 download() {
