@@ -6,7 +6,7 @@
 
 ## Install on A733
 
-Use a Debian 13 ARM64 system with its GPU firmware and kernel `6.6.98-5-aw2511` or `6.6.98-6-aw2511`.
+The packages require a Debian 13-compatible ARM64 system, the A733 GPU firmware, and a kernel with a matching module package. This release includes modules for `6.6.98-5-aw2511` and `6.6.98-6-aw2511`.
 
 Download the dated ARM64 ZIP from [GitHub Releases](https://github.com/shawnchain-cxw/expej-packaging/releases), extract it into an empty directory, and run the following there. The command selects the module for the running kernel and installs both userspace drivers.
 
@@ -16,7 +16,7 @@ sudo apt install \
   ./expej-vulkan_*.deb ./expej-opengl_*.deb && sudo reboot
 ```
 
-The current packages select Expej Vulkan and OpenGL/GLES per application. See the commands below to try them after reboot.
+Select Expej Vulkan and OpenGL/GLES per application using the commands below.
 
 <details>
 <summary>Optional verification and removal</summary>

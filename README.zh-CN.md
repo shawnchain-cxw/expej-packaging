@@ -6,7 +6,7 @@
 
 ## 在 A733 上安装
 
-使用带配套 GPU 固件的 Debian 13 ARM64 系统，内核版本为 `6.6.98-5-aw2511` 或 `6.6.98-6-aw2511`。
+软件包要求兼容 Debian 13 的 ARM64 系统、A733 GPU 固件，以及匹配的软件包内核版本。当前发行包包含 `6.6.98-5-aw2511` 和 `6.6.98-6-aw2511` 的模块。
 
 从 [GitHub Releases](https://github.com/shawnchain-cxw/expej-packaging/releases) 下载对应日期的 ARM64 ZIP，解压到空目录，在该目录执行下面的命令。命令会选中与当前内核匹配的模块，并一并安装 Vulkan 和 OpenGL/GLES 驱动。
 
@@ -16,7 +16,7 @@ sudo apt install \
   ./expej-vulkan_*.deb ./expej-opengl_*.deb && sudo reboot
 ```
 
-当前发行包按应用选用 Expej 的 Vulkan 和 OpenGL/GLES。重启后可用下方的命令试用。
+重启后可用下方的命令按应用选用 Expej 的 Vulkan 和 OpenGL/GLES。
 
 <details>
 <summary>可选验证和卸载</summary>
