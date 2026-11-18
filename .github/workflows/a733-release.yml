@@ -1,0 +1,141 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Shawn Chain
+name: A733 ARM64 release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_commit:
+        description: Full commit SHA from expej-mesa for Vulkan and OpenGL/GLES
+        required: true
+        default: '93cb656850020e16c0207ecd045a21c91f77a33e'
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  powervr:
+    name: PowerVR module for ${{ matrix.kernel }}
+    runs-on: ubuntu-24.04-arm
+    container: debian:13-slim
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: [6.6.98-5, 6.6.98-6]
+    steps:
+      - name: Install Debian 13 build tools
+        run: |
+          apt-get -q update
+          apt-get -qy install --no-install-recommends \
+            build-essential bc ca-certificates curl git kmod libelf-dev xz-utils
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Compile and package the kernel module
+        env:
+          KERNEL_VERSION: ${{ matrix.kernel }}
+        run: bash packaging/build-powervr.sh "$KERNEL_VERSION" "$GITHUB_SHA" "$RUNNER_TEMP/debs"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: expej-powervr-${{ matrix.kernel }}-arm64
+          path: ${{ runner.temp }}/debs/
+          if-no-files-found: error
+          retention-days: 1
+
+  userspace:
+    name: ${{ matrix.driver }} userspace
+    runs-on: ubuntu-24.04-arm
+    container: debian:13-slim
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        driver: [vulkan, opengl]
+    env:
+      MESA_COMMIT: ${{ inputs.mesa_commit }}
+      DRIVER: ${{ matrix.driver }}
+    steps:
+      - name: Check selected Mesa commit
+        run: '[[ $MESA_COMMIT =~ ^[0-9a-f]{40}$ ]]'
+      - name: Install Debian 13 build tools
+        run: |
+          apt-get -q update
+          apt-get -qy install --no-install-recommends \
+            build-essential ca-certificates dpkg-dev git openssh-client meson ninja-build pkg-config \
+            python3-mako python3-packaging python3-yaml glslang-tools spirv-tools \
+            flex bison llvm-19-dev libclang-19-dev libclang-cpp19-dev libclc-19-dev \
+            libllvmspirvlib-19-dev libdrm-dev libelf-dev libexpat1-dev libzstd-dev zlib1g-dev \
+            libwayland-dev wayland-protocols libx11-dev libx11-xcb-dev libxrandr-dev \
+            libxshmfence-dev libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev \
+            libxcb-sync-dev libxcb-xfixes0-dev libxcb-shm0-dev libxcb-keysyms1-dev
+          if [[ $DRIVER == opengl ]]; then
+            apt-get -qy install --no-install-recommends \
+              libglvnd-dev libwayland-egl-backend-dev libxext-dev libxcb-dri2-0-dev \
+              libxcb-glx0-dev libxxf86vm-dev
+          fi
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check out Mesa source
+        uses: actions/checkout@v6
+        with:
+          repository: shawnchain-cxw/expej-mesa
+          ref: ${{ inputs.mesa_commit }}
+          ssh-key: ${{ secrets.EXPEJ_MESA_DEPLOY_KEY }}
+          path: mesa-source
+          persist-credentials: false
+      - name: Compile and package the userspace driver
+        run: |
+          test "$(git -C mesa-source rev-parse HEAD)" = "$MESA_COMMIT"
+          bash "packaging/build-$DRIVER.sh" mesa-source "$GITHUB_SHA" "$RUNNER_TEMP/debs"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: expej-${{ matrix.driver }}-arm64
+          path: ${{ runner.temp }}/debs/
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish the A733 ZIP
+    if: github.ref == 'refs/heads/main'
+    needs: [powervr, userspace]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: expej-*-arm64
+          path: ${{ runner.temp }}/expej-artifacts
+      - name: Assemble and verify the release ZIP
+        env:
+          MESA_COMMIT: ${{ inputs.mesa_commit }}
+        run: |
+          build_date=$(date -u +%F)
+          tag="a733-$build_date-$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+          bundle="$RUNNER_TEMP/expej-$tag-arm64.zip"
+          bash packaging/build-release.sh "$RUNNER_TEMP/expej-artifacts" "$bundle" \
+            "$build_date" "$GITHUB_SHA" "$MESA_COMMIT"
+          printf 'TAG=%s\nBUNDLE=%s\n' "$tag" "$bundle" >> "$GITHUB_ENV"
+      - name: Publish on GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docs="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA"
+          gh release create "$TAG" "$BUNDLE" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "Expej ${TAG^^} ARM64" --notes-file - <<EOF
+          One ZIP with Vulkan, OpenGL/GLES and PowerVR modules for Debian 13 ARM64
+          kernels 6.6.98-5-aw2511 and 6.6.98-6-aw2511.
+
+          [English installation guide]($docs/README.md#install-on-a733) · [简体中文安装指南]($docs/README.zh-CN.md#在-a733-上安装)
+          EOF

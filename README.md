@@ -21,41 +21,17 @@ The firmware may be compressed. If it is missing, install the corresponding firm
 
 ### Download and install
 
-Download artifacts from successful runs and extract each to a directory named after the artifact. Choose Vulkan and OpenGL/GLES artifacts with the same `Mesa commit` in `build-info.txt`. GitHub retains build artifacts for 30 days.
+Choose a build date on [GitHub Releases](https://github.com/shawnchain-cxw/expej-packaging/releases) and download the `expej-a733-YYYY-MM-DD-<run>.<attempt>-arm64.zip` asset. Each ZIP contains Vulkan and OpenGL/GLES built from the same Mesa commit, PowerVR module packages for both supported kernels, SHA-256 checksums and build information. The date is the UTC date when the build bundle was assembled.
 
-| Workflow | Artifact | Selection |
-| --- | --- | --- |
-| [PowerVR module](https://github.com/shawnchain-cxw/expej-packaging/actions/workflows/powervr-deb.yml) | `expej-powervr-6.6.98-5-arm64` or `expej-powervr-6.6.98-6-arm64` | Match `uname -r`. |
-| [Vulkan](https://github.com/shawnchain-cxw/expej-packaging/actions/workflows/vulkan-deb.yml) | `expej-vulkan-arm64` | Either kernel release. |
-| [OpenGL and GLES](https://github.com/shawnchain-cxw/expej-packaging/actions/workflows/opengl-deb.yml) | `expej-opengl-arm64` | Either kernel release. |
-
-Run from the parent directory of the three extracted artifacts.
-
-```sh
-(
-  set -e
-  kernel=$(uname -r)
-  module_artifact="expej-powervr-${kernel%-aw2511}-arm64"
-  for artifact in "$module_artifact" expej-vulkan-arm64 expej-opengl-arm64; do
-    (cd "$artifact" && sha256sum -c SHA256SUMS)
-  done
-  sudo apt install \
-    ./"$module_artifact"/expej-powervr-"$kernel"_*.deb \
-    ./expej-vulkan-arm64/expej-vulkan_*.deb \
-    ./expej-opengl-arm64/expej-opengl_*.deb \
-    vulkan-tools mesa-utils
-)
-```
-
-The kernel module package updates the module dependency index with `depmod`. Vulkan and OpenGL/GLES install in their own paths and can be selected per application for testing.
-
-If you received a combined ZIP, run the following from its extracted directory instead.
+Extract the ZIP into an empty directory and run the following there. The install command selects the PowerVR module package for the running kernel.
 
 ```sh
 sha256sum -c SHA256SUMS && sudo apt install \
   ./expej-powervr-"$(uname -r)"_*.deb \
   ./expej-vulkan_*.deb ./expej-opengl_*.deb vulkan-tools mesa-utils
 ```
+
+The kernel module package updates the module dependency index with `depmod`. Vulkan and OpenGL/GLES install in their own paths and can be selected per application for testing.
 
 ### Reboot and verify
 
@@ -82,16 +58,6 @@ sudo apt remove "expej-powervr-$(uname -r)" expej-vulkan expej-opengl
 sudo reboot
 ```
 
-## CI builds
+## Building a release
 
-The manually triggered ARM64 workflows publish `.deb` files, SHA-256 checksums and build metadata as workflow artifacts.
-
-| Workflow | Inputs | Package |
-| --- | --- | --- |
-| Vulkan ARM64 package | Full commit SHA from `expej-mesa` | `expej-vulkan`, a selectable Vulkan ICD |
-| OpenGL and GLES ARM64 package | Full commit SHA with the native PowerVR Gallium build target | `expej-opengl`, selected per application with `expej-gl-run` |
-| PowerVR ARM64 module packages | Published kernel headers and a pinned PowerVR backport | One `expej-powervr-*` package for each supported kernel release |
-
-The userspace workflows use the `EXPEJ_MESA_DEPLOY_KEY` Actions secret with read-only access to the Mesa repository. Their artifacts record both the selected Mesa commit and the packaging commit. The module workflow uses the kernel headers and PowerVR patch series without a Mesa checkout. The current module targets are `6.6.98-5-aw2511` and `6.6.98-6-aw2511`.
-
-The default userspace workflow inputs select the same Mesa commit. Packaging revisions follow the Debian version suffix. Driver build identifiers follow the source.
+Run the [A733 ARM64 release workflow](https://github.com/shawnchain-cxw/expej-packaging/actions/workflows/a733-release.yml) on `main` with one full `expej-mesa` commit SHA. The workflow uses `EXPEJ_MESA_DEPLOY_KEY` for read-only access to Mesa. It builds both userspace drivers and the two modules in parallel, verifies all four packages, and publishes one ZIP to Releases. The run and attempt numbers keep multiple builds from the same date distinct. Packaging revisions follow the Debian version suffix, and driver build identifiers follow the source.
