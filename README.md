@@ -12,4 +12,6 @@ The manually triggered ARM64 workflows publish `.deb` files, SHA-256 checksums a
 
 The userspace workflows use the `EXPEJ_MESA_DEPLOY_KEY` Actions secret with read-only access to the Mesa repository. Their artifacts record both the selected Mesa commit and the packaging commit. The module workflow uses the kernel headers and PowerVR patch series without a Mesa checkout. The current module targets are `6.6.98-5-aw2511` and `6.6.98-6-aw2511`.
 
+The default OpenGL source checkpoint, `e5d00daf4e6`, still needs the native Gallium Meson entry and matching PowerVR compiler and command encoding sources. Its workflow currently reports a source configuration failure and has no package artifact. Once a complete source commit is available, select that commit in the workflow input.
+
 Use [the trial instructions](packaging/TESTING.md) to select the right kernel module and validate Vulkan on the target board. Packaging revisions follow the Debian version suffix. Driver build identifiers follow the source.

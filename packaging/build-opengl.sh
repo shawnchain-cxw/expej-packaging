@@ -35,7 +35,10 @@ dri="$library_dir/dri/powervr_dri.so"
 manifest="$root$prefix/share/glvnd/egl_vendor.d/50_mesa.json"
 test -f "$dri"
 test -f "$manifest"
-strings "$dri" | grep -Fx "Expej v$serial"
+mapfile -t gallium_libraries < <(find "$library_dir" -maxdepth 1 -type f -name 'libgallium-*.so')
+test "${#gallium_libraries[@]}" = 1
+gallium=${gallium_libraries[0]}
+strings "$gallium" | grep -Fx "Expej v$serial"
 
 install -Dm644 docs/license.rst "$root/usr/share/doc/$package/copyright"
 mkdir -p "$root/usr/bin" "$root/DEBIAN" "$work/debian"
@@ -43,6 +46,7 @@ cat > "$root/usr/bin/expej-gl-run" <<EOF
 #!/bin/sh
 export LD_LIBRARY_PATH="$prefix/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
 export LIBGL_DRIVERS_PATH="$prefix/lib/dri"
+export GBM_BACKENDS_PATH="$prefix/lib/gbm"
 export __EGL_VENDOR_LIBRARY_FILENAMES="$prefix/share/glvnd/egl_vendor.d/50_mesa.json"
 export __GLX_VENDOR_LIBRARY_NAME=mesa
 exec "\$@"
@@ -60,7 +64,8 @@ Architecture: arm64
 Description: Expej PowerVR OpenGL and GLES driver
 EOF
 shlibdeps=$(cd "$work" && dpkg-shlibdeps -O -l"$library_dir" \
-    -S"$root" -e"$dri" -e"$library_dir/libEGL_mesa.so.0" -e"$library_dir/libGLX_mesa.so.0")
+    -S"$root" -e"$dri" -e"$gallium" \
+    -e"$library_dir/libEGL_mesa.so.0" -e"$library_dir/libGLX_mesa.so.0")
 [[ $shlibdeps == shlibs:Depends=* ]]
 cat > "$root/DEBIAN/control" <<EOF
 Package: $package
@@ -77,7 +82,7 @@ EOF
 
 {
     printf 'Mesa commit: %s\nPackaging commit: %s\nDriver build: v%s\n' "$commit" "$recipe_commit" "$serial"
-    readelf -n "$dri" | grep 'Build ID:'
+    readelf -n "$gallium" | grep 'Build ID:'
 } > "$output/build-info.txt"
 deb="${package}_${version}_arm64.deb"
 dpkg-deb --root-owner-group --build "$root" "$output/$deb"
