@@ -6,40 +6,29 @@
 
 ## Install on A733
 
-### Check the system requirements
+Use a Debian 13 ARM64 system with its GPU firmware and kernel `6.6.98-5-aw2511` or `6.6.98-6-aw2511`.
 
-Use a Debian 13 ARM64 system with kernel `6.6.98-5-aw2511` or `6.6.98-6-aw2511`. The module package requires the installed `linux-image` package for that exact release. Check the kernel, architecture and firmware before selecting a module package.
-
-```sh
-uname -r
-dpkg --print-architecture
-dpkg-query -W "linux-image-$(uname -r)"
-ls /lib/firmware/powervr/rogue_36.56.104.183_v1.fw*
-```
-
-The firmware may be compressed. If it is missing, install the corresponding firmware for your device before loading `powervr`.
-
-### Download and install
-
-Choose a build date on [GitHub Releases](https://github.com/shawnchain-cxw/expej-packaging/releases) and download the `expej-a733-YYYY-MM-DD-<run>.<attempt>-arm64.zip` asset. Each ZIP contains Vulkan and OpenGL/GLES built from the same Mesa commit, PowerVR module packages for both supported kernels, SHA-256 checksums and build information. The date is the UTC date when the build bundle was assembled.
-
-Extract the ZIP into an empty directory and run the following there. The install command selects the PowerVR module package for the running kernel.
+Download the dated ARM64 ZIP from [GitHub Releases](https://github.com/shawnchain-cxw/expej-packaging/releases), extract it into an empty directory, and run the following there. The command selects the module for the running kernel and installs both userspace drivers.
 
 ```sh
-sha256sum -c SHA256SUMS && sudo apt install \
+sudo apt install \
   ./expej-powervr-"$(uname -r)"_*.deb \
-  ./expej-vulkan_*.deb ./expej-opengl_*.deb vulkan-tools mesa-utils
+  ./expej-vulkan_*.deb ./expej-opengl_*.deb && sudo reboot
 ```
 
-The kernel module package updates the module dependency index with `depmod`. Vulkan and OpenGL/GLES install in their own paths and can be selected per application for testing.
+The current packages select Expej Vulkan and OpenGL/GLES per application. See the commands below to try them after reboot.
 
-### Reboot and verify
+<details>
+<summary>Optional verification and removal</summary>
 
-Reboot after installation and check the driver bound to the DRM render node. Run the Vulkan and EGL checks as your normal user.
+Run `sha256sum -c SHA256SUMS` in the extracted directory to verify the download. After reboot, check which driver is bound to the DRM render node and install the test tools.
 
 ```sh
 ls -l /sys/class/drm/renderD*/device/driver
+sudo apt install vulkan-tools mesa-utils
 ```
+
+A DRM render node should be bound to `powervr`. Run the following as your normal user to check that Vulkan reports a PowerVR GPU and EGL reports `Expej vNNNN`.
 
 ```sh
 PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
@@ -49,14 +38,13 @@ PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
 expej-gl-run eglinfo -B
 ```
 
-Vulkan should enumerate a PowerVR GPU and report the packaged build. EGL should report `Expej vNNNN`, where `NNNN` is the OpenGL/GLES build number. If a check fails, collect its output and the kernel log from `sudo journalctl -k -b -n 100`.
-
-To remove the Expej packages, run the following and reboot.
+If a check fails, inspect the kernel log with `sudo journalctl -k -b -n 100`. To remove the packages, run the following and reboot.
 
 ```sh
-sudo apt remove "expej-powervr-$(uname -r)" expej-vulkan expej-opengl
-sudo reboot
+sudo apt remove "expej-powervr-$(uname -r)" expej-vulkan expej-opengl && sudo reboot
 ```
+
+</details>
 
 ## Building a release
 
