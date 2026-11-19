@@ -36,8 +36,12 @@ meson install -C "$work/build" --no-rebuild --destdir "$root" --tags runtime
 library_dir="$root$prefix/lib"
 dri="$library_dir/dri/powervr_dri.so"
 manifest="$root$prefix/share/glvnd/egl_vendor.d/50_mesa.json"
+desktop_damage="$prefix/lib/libexpej_egl_desktop_damage.so"
 test -f "$dri"
 test -f "$manifest"
+if (( 10#$serial >= 226 )); then
+    test -f "$root$desktop_damage"
+fi
 mapfile -t gallium_libraries < <(find "$library_dir" -maxdepth 1 -type f -name 'libgallium-*.so')
 test "${#gallium_libraries[@]}" = 1
 gallium=${gallium_libraries[0]}
@@ -45,6 +49,16 @@ strings "$gallium" | grep -Fx "Expej v$serial"
 
 install -Dm644 docs/license.rst "$root/usr/share/doc/$package/copyright"
 mkdir -p "$root/usr/bin" "$root/DEBIAN" "$work/debian"
+desktop_damage_elf=()
+if test -f "$root$desktop_damage"; then
+    desktop_damage_elf=(-e"$root$desktop_damage")
+    plasma_dropin="$root/usr/lib/systemd/user/plasma-plasmashell.service.d"
+    mkdir -p "$plasma_dropin"
+    cat > "$plasma_dropin/70-expej-egl-damage.conf" <<EOF
+[Service]
+Environment="LD_PRELOAD=$desktop_damage"
+EOF
+fi
 cat > "$root/usr/bin/expej-gl-run" <<EOF
 #!/bin/sh
 export LD_LIBRARY_PATH="$prefix/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
@@ -68,7 +82,8 @@ Description: Expej PowerVR OpenGL and GLES driver
 EOF
 shlibdeps=$(cd "$work" && dpkg-shlibdeps -O -l"$library_dir" \
     -S"$root" -e"$dri" -e"$gallium" \
-    -e"$library_dir/libEGL_mesa.so.0" -e"$library_dir/libGLX_mesa.so.0")
+    -e"$library_dir/libEGL_mesa.so.0" -e"$library_dir/libGLX_mesa.so.0" \
+    "${desktop_damage_elf[@]}")
 [[ $shlibdeps == shlibs:Depends=* ]]
 cat > "$root/DEBIAN/control" <<EOF
 Package: $package
