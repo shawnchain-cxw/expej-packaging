@@ -13,6 +13,9 @@ cd "$source"
 commit=$(git rev-parse --verify HEAD)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+mkdir "$work/source"
+git archive "$commit" | tar -x -C "$work/source"
+cd "$work/source"
 
 serial=$(awk '$2 == "EXPEJ_GL_RELEASE" { gsub(/"/, "", $3); print $3 }' src/imagination/expej_version.h)
 [[ $serial =~ ^[0-9]{4}$ ]]

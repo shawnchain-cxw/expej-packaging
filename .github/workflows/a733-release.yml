@@ -8,7 +8,6 @@ on:
       mesa_commit:
         description: Full commit SHA from expej-mesa for Vulkan and OpenGL/GLES
         required: true
-        default: '93cb656850020e16c0207ecd045a21c91f77a33e'
         type: string
 
 permissions:
