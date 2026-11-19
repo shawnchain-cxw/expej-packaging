@@ -16,7 +16,7 @@ sudo apt install \
   ./expej-vulkan_*.deb ./expej-opengl_*.deb && sudo reboot
 ```
 
-重启后可用下方的命令按应用选用 Expej 的 Vulkan 和 OpenGL/GLES。
+Vulkan 应用通过系统加载器自动发现 Expej。需要按应用选用包内的 OpenGL/GLES 驱动时，可用 `expej-gl-run` 启动。
 
 <details>
 <summary>可选验证和卸载</summary>
@@ -28,12 +28,10 @@ ls -l /sys/class/drm/renderD*/device/driver
 sudo apt install vulkan-tools mesa-utils
 ```
 
-应有一个 DRM 渲染节点绑定到 `powervr`。用普通用户执行下面的命令，确认 Vulkan 能找到 PowerVR GPU，EGL 显示 `Expej vNNNN`。
+应有一个 DRM 渲染节点绑定到 `powervr`。用普通用户执行下面的命令，确认 PowerVR 的 Vulkan `driverInfo` 带有 Expej 版本号，EGL 显示 `Expej vNNNN`。
 
 ```sh
-PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
-  VK_DRIVER_FILES=/usr/share/expej/vulkan/icd.d/powervr_icd.aarch64.json \
-  vulkaninfo --summary
+vulkaninfo --summary
 
 expej-gl-run eglinfo -B -p surfaceless
 ```

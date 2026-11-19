@@ -16,7 +16,7 @@ sudo apt install \
   ./expej-vulkan_*.deb ./expej-opengl_*.deb && sudo reboot
 ```
 
-Select Expej Vulkan and OpenGL/GLES per application using the commands below.
+Vulkan applications discover Expej through the system loader. Use `expej-gl-run` to select the packaged OpenGL/GLES driver per application.
 
 <details>
 <summary>Optional verification and removal</summary>
@@ -28,12 +28,10 @@ ls -l /sys/class/drm/renderD*/device/driver
 sudo apt install vulkan-tools mesa-utils
 ```
 
-A DRM render node should be bound to `powervr`. Run the following as your normal user to check that Vulkan reports a PowerVR GPU and EGL reports `Expej vNNNN`.
+A DRM render node should be bound to `powervr`. Run the following as your normal user to check that the PowerVR Vulkan device reports an Expej build number in `driverInfo` and EGL reports `Expej vNNNN`.
 
 ```sh
-PVR_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
-  VK_DRIVER_FILES=/usr/share/expej/vulkan/icd.d/powervr_icd.aarch64.json \
-  vulkaninfo --summary
+vulkaninfo --summary
 
 expej-gl-run eglinfo -B -p surfaceless
 ```

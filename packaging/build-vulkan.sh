@@ -23,7 +23,8 @@ serial=$(awk '$2 == "EXPEJ_VULKAN_RELEASE" { gsub(/"/, "", $3); print $3 }' src/
 version="$(cat VERSION)+expej${serial}-2"
 package=expej-vulkan
 prefix=/usr/lib/aarch64-linux-gnu/expej
-manifest=/usr/share/expej/vulkan/icd.d/powervr_icd.aarch64.json
+manifest=/usr/share/vulkan/icd.d/expej_powervr_icd.aarch64.json
+legacy_manifest=/usr/share/expej/vulkan/icd.d/powervr_icd.aarch64.json
 root="$work/package"
 export MESA_GIT_SHA1_OVERRIDE="$commit"
 
@@ -52,6 +53,8 @@ with open(destination, "w", encoding="utf-8") as file:
     json.dump(manifest, file, indent=2)
     file.write("\n")
 PY
+install -d "$(dirname "$root$legacy_manifest")"
+ln -s "../../../vulkan/icd.d/${manifest##*/}" "$root$legacy_manifest"
 install -Dm644 docs/license.rst "$root/usr/share/doc/$package/copyright"
 
 mkdir -p "$work/debian" "$root/DEBIAN"
@@ -76,7 +79,7 @@ Priority: optional
 Maintainer: Shawn Chain <w243698397@gmail.com>
 Depends: libvulkan1, ${shlibdeps#shlibs:Depends=}
 Description: Expej PowerVR Vulkan driver for ARM64
- Includes a selectable Vulkan ICD for testing alongside a system driver.
+ Registers the Expej PowerVR ICD with the system Vulkan loader.
 EOF
 
 {
